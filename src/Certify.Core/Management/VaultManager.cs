@@ -8,6 +8,7 @@ using Certify.Models;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -30,8 +31,7 @@ namespace Certify
         internal string vaultFolderPath;
         private string vaultFilename;
         private string vaultProfile = null;
-        public List<ActionLogItem> ActionLogs { get; }
-        private NetworkUtils NetUtil;
+        public Dictionary<string,List<ActionLogItem>> ActionLogs { get; }
 
         internal const string VAULT_LOCK = "CertifyVault";
 
@@ -52,9 +52,7 @@ namespace Certify
             this.vaultFolderPath = vaultFolderPath;
             this.vaultFilename = vaultFilename;
 
-            this.ActionLogs = new List<ActionLogItem>();
-            this.ActionLogs.Capacity = 1000;
-            this.NetUtil = new NetworkUtils { Log = (message) => LogAction(message) };
+            this.ActionLogs = new Dictionary<string,List<ActionLogItem>>();
 
 #if DEBUG
             this.InitVault(staging: true);
@@ -140,7 +138,7 @@ namespace Certify
                 {
                     using (var vlt = ACMESharpUtils.GetVault(this.vaultProfile))
                     {
-                        this.LogAction("InitVault", "Creating Vault");
+                        Debug.WriteLine("InitVault: Creating Vault");
 
                         OpenVaultStorage(vlt, true);
 
@@ -157,7 +155,7 @@ namespace Certify
             }
             else
             {
-                this.LogAction("InitVault", "Vault exists.");
+                Debug.WriteLine("InitVault: Vault exists.");
             }
 
             this.vaultFolderPath = GetVaultPath();
@@ -171,12 +169,9 @@ namespace Certify
             return vaultConfig.BaseUri;
         }
 
-        private void LogAction(string command, string result = null, string managedSiteId = null)
+        private void LogAction(string command, string result, string managedSiteId)
         {
-            if (this.ActionLogs != null)
-            {
-                this.ActionLogs.Add(new ActionLogItem { Command = command, Result = result, ManagedSiteId = managedSiteId, DateTime = DateTime.Now });
-            }
+            ActionLogs[managedSiteId].Add(new ActionLogItem { Command = command, Result = result, ManagedSiteId = managedSiteId, DateTime = DateTime.Now });
         }
 
         public VaultInfo LoadVaultFromFile()
@@ -653,8 +648,12 @@ namespace Certify
 
         #region ACME Workflow Steps
 
-        public PendingAuthorization BeginRegistrationAndValidation(CertRequestConfig requestConfig, string identifierAlias, string challengeType = ACMESharpCompat.ACMESharpUtils.CHALLENGE_TYPE_HTTP, string domain = null)
+        public PendingAuthorization BeginRegistrationAndValidation(ManagedSite managedSite, string identifierAlias, string domain = null)
         {
+            var requestConfig = managedSite.RequestConfig;
+            string challengeType = managedSite.RequestConfig.ChallengeType;
+            ActionLogs[managedSite.Id] = new List<ActionLogItem>(); // reset action logs
+
             //if no alternative domain specified, use the primary domains as the subject
             if (domain == null) domain = requestConfig.PrimaryDomain;
 
@@ -672,7 +671,7 @@ namespace Certify
             catch (Exception exp)
             {
                 // failed to register the domain identifier with LE (rate limit or CAA fail?)
-                LogAction("NewIdentifier", exp.ToString());
+                LogAction("NewIdentifier", exp.ToString(), managedSite.Id);
                 return new PendingAuthorization { AuthorizationError = exp.ToString() };
             }
 
@@ -684,7 +683,7 @@ namespace Certify
             if (identifier != null && identifier.Authorization != null && identifier.Authorization.IsPending())
             {
                 var authState = ACMESharpUtils.CompleteChallenge(identifier.Alias, challengeType, Handler: "manual", Regenerate: true, Repeat: true);
-                LogAction("CompleteChallenge", authState.Status);
+                LogAction("CompleteChallenge", authState.Status, managedSite.Id);
 
                 //get challenge info for this identifier
                 identifier = GetIdentifier(identifierAlias, reloadVaultConfig: true);
@@ -693,19 +692,19 @@ namespace Certify
                     //identifier challenge specification is now ready for use to prepare and answer for LetsEncrypt to check
 
                     var challengeInfo = identifier.Challenges.FirstOrDefault(c => c.Value.Type == challengeType).Value;
-                    return new PendingAuthorization() { Challenge = GetAuthorizeChallengeItemFromAuthChallenge(challengeInfo), Identifier = GetDomainIdentifierItemFromIdentifierInfo(identifier), TempFilePath = "", ExtensionlessConfigCheckedOK = false }; //TODO (filter on managed site): LogItems = this.GetActionLogSummary()
+                    return new PendingAuthorization() { Challenge = GetAuthorizeChallengeItemFromAuthChallenge(challengeInfo), Identifier = GetDomainIdentifierItemFromIdentifierInfo(identifier), TempFilePath = "", ExtensionlessConfigCheckedOK = false, LogItems = GetActionLogSummary(managedSite) };
                 }
                 catch (Exception exp)
                 {
-                    LogAction("GetIdentifier", exp.ToString());
+                    LogAction("GetIdentifier", exp.ToString(), managedSite.Id);
                     //identifier challenge could not be requested this time (FIXME: did we discard it when reloading vault?)
-                    return null;
+                    return new PendingAuthorization { AuthorizationError = exp.ToString() };
                 }
             }
             else
             {
                 //identifier is null or already valid (previously authorized)
-                return new PendingAuthorization() { Challenge = null, Identifier = GetDomainIdentifierItemFromIdentifierInfo(identifier), TempFilePath = "", ExtensionlessConfigCheckedOK = false, LogItems = this.GetActionLogSummary() };
+                return new PendingAuthorization() { Challenge = null, Identifier = GetDomainIdentifierItemFromIdentifierInfo(identifier), TempFilePath = "", ExtensionlessConfigCheckedOK = false, LogItems = GetActionLogSummary(managedSite) };
             }
         }
 
@@ -765,7 +764,8 @@ namespace Certify
         {
             return await Task.Run(() =>
             {
-                ActionLogs.Clear(); // reset action logs
+                ActionLogs[managedSite.Id] = new List<ActionLogItem>(); // reset action logs
+                var netUtil = new NetworkUtils { Log = (message) => LogAction("TestChallengeResponse", message, managedSite.Id) };
 
                 var requestConfig = managedSite.RequestConfig;
                 var result = new APIResult();
@@ -791,7 +791,7 @@ namespace Certify
                         },
                         domain =>
                         {
-                            var (ok, message) = NetUtil.CheckDNS(domain);
+                            var (ok, message) = netUtil.CheckDNS(domain);
                             if (!ok)
                             {
                                 result.IsOK = false;
@@ -864,6 +864,10 @@ namespace Certify
                                 iisManager, domain, managedSite, simulatedAuthorization
                             )();
                         });
+                        if (!result.IsOK)
+                        {
+                            result.FailedItemSummary.AddRange(GetActionLogSummary(managedSite));
+                        }
                     }
                     else
                     {
@@ -872,7 +876,7 @@ namespace Certify
                 }
                 finally
                 {
-                    //FIXME: needs to be filtered by managed site: result.Message = String.Join("\r\n", GetActionLogSummary());
+                    result.Message = String.Join("\r\n", GetActionLogSummary(managedSite));
                     generatedAuthorizations.ForEach(ga => ga.Cleanup());
                 }
                 return result;
@@ -925,6 +929,7 @@ namespace Certify
                         pendingAuth.TlsSniConfigCheckedOK = check();
                     }
                 }
+                pendingAuth.LogItems = GetActionLogSummary(managedSite);
             }
             return pendingAuth;
         }
@@ -939,8 +944,8 @@ namespace Certify
         {
             var requestConfig = managedSite.RequestConfig;
             var httpChallenge = (ACMESharp.ACME.HttpChallenge)pendingAuth.Challenge.ChallengeData;
-            this.LogAction("Preparing challenge response for LetsEncrypt server to check at: " + httpChallenge.FileUrl);
-            this.LogAction("If the challenge response file is not accessible at this exact URL the validation will fail and a certificate will not be issued.");
+            LogAction("PrepareHttp01", "Preparing challenge response for LetsEncrypt server to check at: " + httpChallenge.FileUrl, managedSite.Id);
+            LogAction("PrepareHttp01", "If the challenge response file is not accessible at this exact URL the validation will fail and a certificate will not be issued.", managedSite.Id);
 
             // get website root path, expand environment variables if required
             string websiteRootPath = requestConfig.WebsiteRootPath;
@@ -968,7 +973,7 @@ namespace Certify
             {
                 // our website no longer appears to exist on disk, continuing would potentially
                 // create unwanted folders, so it's time for us to give up
-                this.LogAction($"The website root path for {managedSite.Name} could not be determined. Request cannot continue.");
+                LogAction("PrepareHttp01", $"The website root path for {managedSite.Name} could not be determined. Request cannot continue.", managedSite.Id);
                 return () => false;
             }
 
@@ -998,31 +1003,32 @@ namespace Certify
             // create a web.config for extensionless files, then test it (make a request for the
             // extensionless configcheck file over http)
             string webConfigContent = Core.Properties.Resources.IISWebConfig;
+            var netUtil = new NetworkUtils { Log = (message) => LogAction("NetUtil", message, managedSite.Id) };
 
             if (!File.Exists(destPath + "\\web.config"))
             {
                 // no existing config, attempt auto config and perform test
-                this.LogAction($"Config does not exist, writing default config to: {destPath}\\web.config");
+                LogAction("PrepareHttp01", $"Config does not exist, writing default config to: {destPath}\\web.config", managedSite.Id);
                 System.IO.File.WriteAllText(destPath + "\\web.config", webConfigContent);
-                return () => NetUtil.CheckURL($"http://{domain}/{httpChallenge.FilePath}");
+                return () => netUtil.CheckURL($"http://{domain}/{httpChallenge.FilePath}");
             }
             else
             {
                 // web config already exists, don't overwrite it, just test it
                 return () =>
                 {
-                    if (NetUtil.CheckURL($"http://{domain}/{httpChallenge.FilePath}"))
+                    if (netUtil.CheckURL($"http://{domain}/{httpChallenge.FilePath}"))
                     {
                         return true;
                     }
 
                     if (requestConfig.PerformAutoConfig)
                     {
-                        this.LogAction($"Pre-config check failed: Auto-config will overwrite existing config: {destPath}\\web.config");
+                        LogAction("PrepareHttp01", $"Pre-config check failed: Auto-config will overwrite existing config: {destPath}\\web.config", managedSite.Id);
                         // didn't work, try our default config
                         System.IO.File.WriteAllText(destPath + "\\web.config", webConfigContent);
 
-                        if (NetUtil.CheckURL($"http://{domain}/{httpChallenge.FilePath}"))
+                        if (netUtil.CheckURL($"http://{domain}/{httpChallenge.FilePath}"))
                         {
                             return true;
                         }
@@ -1055,18 +1061,19 @@ namespace Certify
             // generate certs and install iis bindings
             var cleanupQueue = new List<Action>();
             var checkQueue = new List<Func<bool>>();
+            var netUtil = new NetworkUtils { Log = (message) => LogAction("PrepareTlsSni01", message, managedSite.Id) };
             foreach (string hex in z.Select(b =>
                 BitConverter.ToString(b).Replace("-", "").ToLower()))
             {
                 string sni = $"{hex.Substring(0, 32)}.{hex.Substring(32)}.acme.invalid";
-                this.LogAction($"Preparing binding at: https://{domain}, sni: {sni}");
+                LogAction("PrepareTlsSni01", $"Preparing binding: https://{domain}, sni: {sni}", managedSite.Id);
 
                 var x509 = CertificateManager.GenerateTlsSni01Certificate(sni);
                 CertificateManager.StoreCertificate(x509);
                 iisManager.InstallCertificateforBinding(managedSite, x509, sni);
 
                 // add check to the queue
-                checkQueue.Add(() => NetUtil.CheckSNI(domain, sni));
+                checkQueue.Add(() => netUtil.CheckSNI(domain, sni));
 
                 // add cleanup actions to queue
                 cleanupQueue.Add(() => iisManager.RemoveHttpsBinding(managedSite, sni));
@@ -1090,7 +1097,7 @@ namespace Certify
 
             while (identiferStatus.Authorization.Status == "pending" && attempts < maxAttempts)
             {
-                System.Threading.Thread.Sleep(2000); //wait a couple of seconds before checking again
+                Thread.Sleep(2000); //wait a couple of seconds before checking again
                 this.UpdateIdentifier(domainIdentifierAlias);
                 identiferStatus = this.GetIdentifier(domainIdentifierAlias, true);
                 attempts++;
@@ -1099,11 +1106,11 @@ namespace Certify
             if (identiferStatus.Authorization.Status != "valid")
             {
                 //still pending or failed
-                System.Diagnostics.Debug.WriteLine("LE Authorization problem: " + identiferStatus.Authorization.Status);
+                Debug.WriteLine("LE Authorization problem: " + identiferStatus.Authorization.Status);
 
                 var failedChallenge = identiferStatus.Authorization.Challenges.FirstOrDefault(c => c.ChallengePart.Error != null);
                 // throw new Exception(String.Join("\r\n", failedChallenge.ChallengePart.Error));
-                LogAction(String.Join("\r\n", failedChallenge.ChallengePart.Error));
+                Debug.WriteLine(String.Join("\r\n", failedChallenge.ChallengePart.Error));
 
                 return false;
             }
@@ -1203,18 +1210,9 @@ namespace Certify
             return "ident" + Guid.NewGuid().ToString().Substring(0, 8).Replace("-", "");
         }
 
-        public List<string> GetActionLogSummary()
+        public List<string> GetActionLogSummary(ManagedSite managedSite)
         {
-            List<string> output = new List<string>();
-            if (this.ActionLogs != null)
-            {
-                ActionLogs.ToList().ForEach((a) =>
-                {
-                    output.Add(a.Command + " : " + (a.Result != null ? a.Result : ""));
-                });
-            }
-
-            return output;
+            return ActionLogs[managedSite.Id].Select(a => $"{a.Command} : {a.Result ?? ""}").ToList();
         }
 
         #endregion Utils

@@ -22,9 +22,7 @@ namespace Certify.Management
 
         string GetVaultSummary();
 
-        ActionLogItem GetLastActionLogItem();
-
-        List<string> GetActionSummary();
+        List<string> GetActionSummary(ManagedSite managedSite);
 
         void EnableSensitiveFileEncryption();
 
@@ -32,7 +30,7 @@ namespace Certify.Management
 
         IdentifierItem GetDomainIdentifier(string domain);
 
-        PendingAuthorization BeginRegistrationAndValidation(CertRequestConfig config, string domainIdentifierId, string challengeType, string domain);
+        PendingAuthorization BeginRegistrationAndValidation(ManagedSite managedSite, string domainIdentifierId, string domain);
 
         PendingAuthorization PerformIISAutomatedChallengeResponse(IISManager iisManager, ManagedSite managedSite, PendingAuthorization pendingAuth);
 

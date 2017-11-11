@@ -26,7 +26,7 @@ namespace Certify.Management
             {
                 // TODO: check proxy here, needs server support. if successful "return true"; and "LogAction(...)"
                 System.Diagnostics.Debug.WriteLine("ProxyAPI is not implemented for Checking SNI config, trying local");
-                Log($"Proxy TLS SNI binding check error: {host}, {sni}");
+                //Log($"Proxy TLS SNI binding check error: {host}, {sni}");
 
                 return CheckSNI(host, sni, false); // proxy failed, try local
             }
@@ -72,6 +72,10 @@ namespace Certify.Management
                         Log($"Local TLS SNI binding check OK: {host}, {sni}"); ;
                     }
                 }
+                catch (AggregateException ex)
+                {
+                    throw ex.Flatten();
+                }
                 finally
                 {
                     // clean up temp entries in hosts file
@@ -99,7 +103,7 @@ namespace Certify.Management
             {
                 // eat the error that HttpClient throws, either cert validation failed or the site is
                 // inaccessible via https://host name
-                Log($"Local TLS SNI binding check error: {host}, {sni}\n{ex.GetType()}: {ex.Message}\n{ex.StackTrace}");
+                Log($"Local TLS SNI binding check error: {host}, {sni}, {ex.Message}");
                 return false;
             }
             finally
@@ -188,6 +192,7 @@ namespace Certify.Management
             if (useProxy)
             {
                 // TODO: update proxy and implement proxy check here return (ok, message);
+                //Log($"Proxy CheckDNS OK: {domain}");
             }
 
             // check dns
@@ -261,6 +266,7 @@ namespace Certify.Management
             {
                 return errorResponse($"'{domain}' DNSSEC verification failed.");
             }
+            Log($"Local CheckDNS OK: {domain}");
             return (true, "");
         }
     }

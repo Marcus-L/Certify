@@ -322,9 +322,9 @@ namespace Certify.Management
                         // begin authorization by registering the domain identifier. This may return
                         // an already validated authorization or we may still have to complete the
                         // authorization challenge. When rate limits are encountered, this step may fail.
-                        var authorization = _vaultProvider.BeginRegistrationAndValidation(config, domainIdentifierId, challengeType: config.ChallengeType, domain: domain);
+                        var authorization = _vaultProvider.BeginRegistrationAndValidation(managedSite, domainIdentifierId, domain);
 
-                        if (authorization != null && authorization.Identifier != null)
+                        if (authorization.Identifier != null)
                         {
                             // check if authorization is pending, it may already be valid if an
                             // existing authorization was reused
@@ -341,10 +341,7 @@ namespace Certify.Management
                                     authorization = _vaultProvider.PerformIISAutomatedChallengeResponse(_iisManager, managedSite, authorization);
 
                                     // pass authorization log items onto main log
-                                    /*authorization.LogItems?.ForEach((msg) =>
-                                    {
-                                        if (msg != null) LogMessage(managedSite.Id, msg, LogItemType.GeneralInfo);
-                                    });*/
+                                    authorization.LogItems.ForEach(msg => LogMessage(managedSite.Id, msg));
 
                                     if ((config.ChallengeType == ACMESharpCompat.ACMESharpUtils.CHALLENGE_TYPE_HTTP && config.PerformExtensionlessConfigChecks && !authorization.ExtensionlessConfigCheckedOK) ||
                                         (config.ChallengeType == ACMESharpCompat.ACMESharpUtils.CHALLENGE_TYPE_SNI && config.PerformTlsSniBindingConfigChecks && !authorization.TlsSniConfigCheckedOK))
@@ -423,33 +420,17 @@ namespace Certify.Management
                                         errorMsg = authorization.Identifier.ValidationError;
                                         var errorType = authorization.Identifier.ValidationErrorType;
                                     }
-
-                                    failureSummaryMessage = $"Domain validation failed: {domain} \r\n{errorMsg}";
-
-                                    LogMessage(managedSite.Id, string.Format(CoreSR.CertifyManager_DomainValidationFailed, domain));
-
+                                    LogMessage(managedSite.Id, string.Format(CoreSR.CertifyManager_DomainValidationFailed, domain, errorMsg));
+                                    //domainIdentifierId
                                     allIdentifiersValidated = false;
                                 }
                             }
                         }
                         else
                         {
-                            // could not begin authorization : TODO: pass error from authorization
-                            // step to UI
-
-                            var lastActionLogItem = _vaultProvider.GetLastActionLogItem();
-                            var actionLogMsg = "";
-                            if (lastActionLogItem != null)
-                            {
-                                actionLogMsg = lastActionLogItem.ToString();
-                            }
-
-                            LogMessage(managedSite.Id, $"Could not begin authorization for domain with Let's Encrypt: { domain } {(authorization?.AuthorizationError != null ? authorization?.AuthorizationError : "Could not register domain identifier")} - {actionLogMsg}");
-
-                            /*if (authorization != null && authorization.LogItems != null)
-                            {
-                                LogMessage(managedSite.Id, authorization.LogItems);
-                            }*/
+                            // could not begin authorization 
+                            authorization.LogItems.ForEach(msg => LogMessage(managedSite.Id, msg));
+                            LogMessage(managedSite.Id, $"Could not begin authorization for domain with Let's Encrypt: { domain } {(authorization?.AuthorizationError ?? "Could not register domain identifier")}");
                             allIdentifiersValidated = false;
                         }
 
@@ -554,7 +535,7 @@ namespace Certify.Management
                     result.IsSuccess = false;
                     result.Message = string.Format(Certify.CoreSR.CertifyManager_RequestFailed, managedSite.Name, exp.Message, exp);
                     LogMessage(managedSite.Id, result.Message, LogItemType.CertficateRequestFailed);
-                    //LogMessage(managedSite.Id, String.Join("\r\n", _vaultProvider.GetActionSummary())); FIXME: needs to be filtered in managed site
+                    LogMessage(managedSite.Id, String.Join("\r\n", _vaultProvider.GetActionSummary(managedSite)));
                     System.Diagnostics.Debug.WriteLine(exp.ToString());
                 }
                 finally

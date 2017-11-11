@@ -89,9 +89,9 @@ namespace Certify.Management.APIProviders
             return _vaultManager.GetVaultPath();
         }
 
-        public List<string> GetActionSummary()
+        public List<string> GetActionSummary(ManagedSite managedSite)
         {
-            return _vaultManager.GetActionLogSummary();
+            return _vaultManager.GetActionLogSummary(managedSite);
         }
 
         public void EnableSensitiveFileEncryption()
@@ -99,9 +99,9 @@ namespace Certify.Management.APIProviders
             _vaultManager.UseEFSForSensitiveFiles = true;
         }
 
-        public PendingAuthorization BeginRegistrationAndValidation(CertRequestConfig config, string domainIdentifierId, string challengeType, string domain)
+        public PendingAuthorization BeginRegistrationAndValidation(ManagedSite managedSite, string domainIdentifierId, string domain)
         {
-            return _vaultManager.BeginRegistrationAndValidation(config, domainIdentifierId, challengeType, domain);
+            return _vaultManager.BeginRegistrationAndValidation(managedSite, domainIdentifierId, domain);
         }
 
         public PendingAuthorization PerformIISAutomatedChallengeResponse(IISManager iisManager, ManagedSite managedSite, PendingAuthorization pendingAuth)
@@ -162,10 +162,10 @@ namespace Certify.Management.APIProviders
             _vaultManager.CleanupVault();
         }
 
-        public ActionLogItem GetLastActionLogItem()
-        {
-            return _vaultManager.ActionLogs.LastOrDefault();
-        }
+        //public ActionLogItem GetLastActionLogItem()
+        //{
+        //    return _vaultManager.ActionLogs.LastOrDefault();
+        //}
 
         #endregion IACMEClientProvider methods
     }

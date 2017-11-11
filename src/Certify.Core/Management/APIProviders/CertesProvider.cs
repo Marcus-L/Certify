@@ -53,7 +53,7 @@ namespace Certify.Management.APIProviders
             return null;
         }
 
-        public List<string> GetActionSummary()
+        public List<string> GetActionSummary(ManagedSite managedSite)
         {
             System.Diagnostics.Debug.WriteLine("Certes: GetActionSummary not implemented");
             return null;
@@ -102,7 +102,7 @@ namespace Certify.Management.APIProviders
             throw new NotImplementedException();
         }
 
-        public PendingAuthorization BeginRegistrationAndValidation(CertRequestConfig config, string domainIdentifierId, string challengeType, string domain)
+        public PendingAuthorization BeginRegistrationAndValidation(ManagedSite managedSite, string domainIdentifierId, string domain)
         {
             throw new NotImplementedException();
         }
@@ -133,11 +133,6 @@ namespace Certify.Management.APIProviders
         }
 
         public void PerformVaultCleanup()
-        {
-            throw new NotImplementedException();
-        }
-
-        public ActionLogItem GetLastActionLogItem()
         {
             throw new NotImplementedException();
         }
